@@ -1,0 +1,24 @@
+[Unit]
+Description=Pixy — PixelPro Studios Telegram assistant
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/pixy-agent
+EnvironmentFile=/home/pi/pixy-agent/.env
+# Ensure uv is on PATH for the service user
+Environment=PATH=/home/pi/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=/usr/bin/env uv run python -m pixy
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Soft hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

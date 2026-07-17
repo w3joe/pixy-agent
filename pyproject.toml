@@ -1,0 +1,29 @@
+[project]
+name = "pixy"
+version = "0.1.0"
+description = "Telegram personal assistant for PixelPro Studios staff"
+readme = "README.md"
+authors = [
+    { name = "Tan Wee Joe", email = "84664178+w3joe@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "apscheduler>=3.11.3",
+    "fastapi>=0.139.2",
+    "google-genai>=2.12.1",
+    "pydantic-settings>=2.14.2",
+    "python-dotenv>=1.2.2",
+    "python-telegram-bot>=22.8",
+    "sqlalchemy>=2.0.51",
+    "structlog>=26.1.0",
+    "tzdata>=2026.3",
+    "uvicorn>=0.51.0",
+    "watchdog>=6.0.0",
+]
+
+[project.scripts]
+pixy = "pixy.__main__:main"
+
+[build-system]
+requires = ["uv_build>=0.11.1,<0.12.0"]
+build-backend = "uv_build"

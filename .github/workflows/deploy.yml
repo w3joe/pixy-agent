@@ -1,0 +1,49 @@
+# GitHub Actions → Tailscale SSH → pull + restart Pixy on the Pi
+#
+# Required repository secrets:
+#   TAILSCALE_AUTHKEY  — reusable auth key for ephemeral CI nodes
+#   PI_SSH_HOST        — Tailscale MagicDNS name or 100.x IP (e.g. pixy-pi)
+#   PI_SSH_USER        — SSH user (e.g. pi)
+#   PI_SSH_KEY         — private key with access to the Pi
+#   PI_APP_PATH        — absolute path to the repo on the Pi (e.g. /home/pi/pixy-agent)
+
+name: Deploy Pixy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connect Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.PI_SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Deploy over SSH
+        env:
+          PI_SSH_HOST: ${{ secrets.PI_SSH_HOST }}
+          PI_SSH_USER: ${{ secrets.PI_SSH_USER }}
+          PI_APP_PATH: ${{ secrets.PI_APP_PATH }}
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new \
+            "${PI_SSH_USER}@${PI_SSH_HOST}" \
+            "set -euo pipefail
+             cd '${PI_APP_PATH}'
+             git pull --ff-only
+             uv sync
+             sudo systemctl restart pixy
+             sudo systemctl --no-pager --full status pixy | head -n 20"
