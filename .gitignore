@@ -57,11 +57,13 @@ coverage.xml
 *.cover
 *.py,cover
 
-# Runtime data (SQLite, logs DB)
+# Runtime data (SQLite, logs DB, daemon PID/log)
 data/*.sqlite
 data/*.sqlite3
 data/*.db
 data/*.db-*
+data/pixy.pid
+data/pixy.log
 !data/.gitkeep
 
 # Agent memory (keep directory via .gitkeep)

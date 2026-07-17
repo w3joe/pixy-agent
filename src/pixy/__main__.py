@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import os
 import signal
+import subprocess
+import sys
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from pixy.agent.context import ContextBuilder
 from pixy.agent.history import HistoryStore
 from pixy.agent.loop import AgentLoop
 from pixy.api.server import create_app, serve_api
-from pixy.config import get_settings
+from pixy.config import REPO_ROOT, get_settings
 from pixy.gateway.telegram import TelegramGateway
 from pixy.llm.client import LLMClient
 from pixy.logging.setup import get_logger, setup_logging
@@ -26,6 +32,10 @@ from pixy.skills.loader import SkillLoader
 from pixy.skills.registry import SkillRegistry
 
 log = get_logger("pixy")
+
+PID_PATH = REPO_ROOT / "data" / "pixy.pid"
+LOG_PATH = REPO_ROOT / "data" / "pixy.log"
+_STOP_WAIT_SECS = 10.0
 
 
 async def run() -> None:
@@ -144,8 +154,135 @@ async def run() -> None:
     await gateway.stop()
 
 
-def main() -> None:
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_pid(path: Path = PID_PATH) -> int | None:
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def _write_pid(pid: int, path: Path = PID_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"{pid}\n", encoding="utf-8")
+
+
+def _clear_pid(path: Path = PID_PATH) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _running_pid() -> int | None:
+    pid = _read_pid()
+    if pid is None:
+        return None
+    if _pid_alive(pid):
+        return pid
+    _clear_pid()
+    return None
+
+
+def cmd_run() -> int:
     asyncio.run(run())
+    return 0
+
+
+def cmd_start() -> int:
+    existing = _running_pid()
+    if existing is not None:
+        print(f"pixy already running (pid {existing})", file=sys.stderr)
+        return 1
+
+    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
+    log_file = open(LOG_PATH, "a", encoding="utf-8")  # noqa: SIM115
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "pixy", "run"],
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            cwd=str(REPO_ROOT),
+            start_new_session=True,
+        )
+    finally:
+        log_file.close()
+
+    _write_pid(proc.pid)
+    print(f"pixy started (pid {proc.pid})")
+    print(f"logs: {LOG_PATH}")
+    return 0
+
+
+def cmd_stop() -> int:
+    pid = _read_pid()
+    if pid is None:
+        print("pixy is not running")
+        return 0
+    if not _pid_alive(pid):
+        _clear_pid()
+        print("pixy is not running (stale pid file removed)")
+        return 0
+
+    os.kill(pid, signal.SIGTERM)
+    deadline = time.monotonic() + _STOP_WAIT_SECS
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            break
+        time.sleep(0.2)
+    else:
+        print(f"pixy did not exit within {_STOP_WAIT_SECS:.0f}s (pid {pid})", file=sys.stderr)
+        return 1
+
+    _clear_pid()
+    print(f"pixy stopped (pid {pid})")
+    return 0
+
+
+def cmd_status() -> int:
+    pid = _running_pid()
+    if pid is None:
+        print("pixy is stopped")
+        return 1
+    print(f"pixy is running (pid {pid})")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="pixy", description="Pixy Telegram assistant")
+    sub = parser.add_subparsers(dest="command")
+
+    sub.add_parser("run", help="Run in the foreground (default)")
+    sub.add_parser("start", help="Start in the background")
+    sub.add_parser("stop", help="Stop the background process")
+    sub.add_parser("status", help="Show whether the background process is running")
+
+    args = parser.parse_args(argv)
+    command = args.command or "run"
+
+    handlers = {
+        "run": cmd_run,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "status": cmd_status,
+    }
+    raise SystemExit(handlers[command]())
 
 
 if __name__ == "__main__":

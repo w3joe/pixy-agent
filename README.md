@@ -23,8 +23,14 @@ uv run python scripts/smoke_llm.py --force vertex
 #    tailscale funnel 8080
 #    Then set TELEGRAM_WEBHOOK_URL=https://<magicdns>/telegram/webhook
 
-# 5. Run
+# 5. Run (foreground)
 uv run python -m pixy
+# or: uv run pixy run
+
+# Background daemon (PID in data/pixy.pid, logs in data/pixy.log)
+uv run pixy start
+uv run pixy status
+uv run pixy stop
 ```
 
 API: `http://<host>:8080/health`, `/status`, `/logs`  
@@ -53,7 +59,9 @@ Tailscale Funnel is the usual path on a Pi without opening home-router ports.
 
 ## Skills
 
-Drop a Python file in `skills/`:
+Two layouts are supported (hot-reloaded):
+
+**Flat module** — `skills/ping.py`:
 
 ```python
 SKILL = {
@@ -70,13 +78,32 @@ def run(**kwargs) -> str:
     return "pong"
 ```
 
+**Package skill** — `skills/<name>/skill.py` plus helpers (e.g. `skills/aspire/` with SDK, templates, refs).
+
+### Aspire bank (read-only)
+
+`skills/aspire/` exposes `aspire_bank` for PixelPro Aspire accounts / balances / statements.
+
+```bash
+# .env
+ASPIRE_CLIENT_ID=...
+ASPIRE_CLIENT_SECRET=...
+# ASPIRE_BASE_URL=https://api.aspireapp.com/public/v1
+
+uv run python scripts/smoke_aspire.py
+```
+
+Outbound IP must be whitelisted by Aspire. Replies use Telegram HTML (`parse_mode=HTML`).
+
 The watcher reloads on add/change — no process restart.
 
 ## Memory & alerts
 
 Built-in tools (always available): `memory_read/write/append/list`, `schedule_alert`, `list_alerts`, `cancel_alert`.
 
-Alerts use APScheduler with a SQLite jobstore (`data/jobs.sqlite`) and are mirrored to `.memory/alerts.csv`.
+Alerts use APScheduler with a SQLite jobstore (`data/jobs.sqlite`) and are mirrored to `.memory/alerts.csv`. Supports **one-shot** (`when`) and **recurring** (`cron` in SGT). One-shots are removed from `alerts.csv` after they fire; recurring jobs stay until cancelled.
+
+**Per-user identity:** In groups, each staff member gets an isolated conversation history (`chat_id:user_id`). Studio memory files stay shared. Prefer **groups** or a channel’s **linked discussion** for multi-staff use — true channel posts often hide the poster, so Pixy falls back to an `anon` identity there.
 
 ## Deploy (Pi + Tailscale)
 

@@ -1,4 +1,4 @@
-"""Per-chat rolling conversation history."""
+"""Per-user-per-chat rolling conversation history."""
 
 from __future__ import annotations
 
@@ -39,12 +39,13 @@ class ChatHistory:
 
 
 class HistoryStore:
+    """History keyed by `{chat_id}:{user_id}` (isolated per staff member in a group)."""
+
     def __init__(self, max_messages: int = 40) -> None:
         self.max_messages = max_messages
         self._chats: dict[str, ChatHistory] = {}
 
-    def get(self, chat_id: str | int) -> ChatHistory:
-        key = str(chat_id)
-        if key not in self._chats:
-            self._chats[key] = ChatHistory(max_messages=self.max_messages)
-        return self._chats[key]
+    def get(self, history_key: str) -> ChatHistory:
+        if history_key not in self._chats:
+            self._chats[history_key] = ChatHistory(max_messages=self.max_messages)
+        return self._chats[history_key]

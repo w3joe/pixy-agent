@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     skills_dir: Path = Field(default=Path("skills"), alias="SKILLS_DIR")
     data_dir: Path = Field(default=Path("data"), alias="DATA_DIR")
 
+    # Aspire bank API (optional — aspire_bank skill no-ops cleanly if unset)
+    aspire_client_id: str = Field(default="", alias="ASPIRE_CLIENT_ID")
+    aspire_client_secret: str = Field(default="", alias="ASPIRE_CLIENT_SECRET")
+    aspire_base_url: str = Field(
+        default="https://api.aspireapp.com/public/v1",
+        alias="ASPIRE_BASE_URL",
+    )
+
     @field_validator(
         "google_application_credentials",
         "core_md_path",

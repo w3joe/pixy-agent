@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from telegram import Update
-from telegram.constants import ChatType
+from telegram.constants import ChatType, ParseMode
+from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     ContextTypes,
@@ -16,6 +17,7 @@ from telegram.ext import (
 )
 
 from pixy.logging.setup import get_logger
+from pixy.agent.speaker import Speaker
 
 if TYPE_CHECKING:
     from pixy.agent.loop import AgentLoop
@@ -108,7 +110,16 @@ class TelegramGateway:
         log.info("telegram_stopped")
 
     async def send_message(self, chat_id: int, text: str) -> None:
-        await self.application.bot.send_message(chat_id=chat_id, text=text)
+        """Send with Telegram HTML parse mode; fall back to plain text on bad entities."""
+        try:
+            await self.application.bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                parse_mode=ParseMode.HTML,
+            )
+        except BadRequest as exc:
+            log.warning("telegram_html_send_failed", chat_id=chat_id, error=str(exc))
+            await self.application.bot.send_message(chat_id=chat_id, text=text)
 
     def _should_respond(self, update: Update) -> bool:
         message = update.effective_message
@@ -155,14 +166,26 @@ class TelegramGateway:
             ).strip()
 
         chat_id = chat.id
-        log.info("message_in", chat_id=chat_id, text=text[:200])
+        speaker = Speaker.from_telegram_user(message.from_user)
+        log.info(
+            "message_in",
+            chat_id=chat_id,
+            user_id=speaker.user_id,
+            user=speaker.label,
+            text=text[:200],
+        )
         await self._set_pending_reaction(context, chat_id, message.message_id, pending=True)
         try:
             await context.bot.send_chat_action(chat_id=chat_id, action="typing")
-            reply = await self.agent.handle_message(chat_id, text)
-            await message.reply_text(reply)
+            reply = await self.agent.handle_message(chat_id, text, speaker=speaker)
+            await self._reply_html(message, reply)
         except Exception as exc:  # noqa: BLE001
-            log.error("message_failed", chat_id=chat_id, error=str(exc))
+            log.error(
+                "message_failed",
+                chat_id=chat_id,
+                user_id=speaker.user_id,
+                error=str(exc),
+            )
             await message.reply_text(
                 "Something went wrong on my side — try again in a moment."
             )
@@ -170,6 +193,13 @@ class TelegramGateway:
             await self._set_pending_reaction(
                 context, chat_id, message.message_id, pending=False
             )
+
+    async def _reply_html(self, message: Any, text: str) -> None:
+        try:
+            await message.reply_text(text, parse_mode=ParseMode.HTML)
+        except BadRequest as exc:
+            log.warning("telegram_html_reply_failed", error=str(exc))
+            await message.reply_text(text)
 
     async def _set_pending_reaction(
         self,

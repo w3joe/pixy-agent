@@ -10,6 +10,7 @@ from google.genai import types
 
 from pixy.agent.context import ContextBuilder
 from pixy.agent.history import HistoryStore
+from pixy.agent.speaker import Speaker
 from pixy.config import Settings
 from pixy.llm.client import LLMClient
 from pixy.logging.setup import get_logger
@@ -61,14 +62,30 @@ class AgentLoop:
                 return f"error: {exc}"
         return self.skills.run(name, args)
 
-    async def handle_message(self, chat_id: int | str, text: str) -> str:
-        chat_key = str(chat_id)
-        hist = self.history.get(chat_key)
-        hist.add("user", text)
+    async def handle_message(
+        self,
+        chat_id: int | str,
+        text: str,
+        *,
+        speaker: Speaker | None = None,
+    ) -> str:
+        speaker = speaker or Speaker(user_id="anon", display_name="Anonymous")
+        history_key = speaker.history_key(chat_id)
+        persist_path = speaker.persist_filename(chat_id)
+        hist = self.history.get(history_key)
+
+        labeled = f"[{speaker.label}] {text}"
+        hist.add("user", labeled)
 
         system = self.context.system_instruction()
         now = datetime.now(tz=self.tz).strftime("%Y-%m-%d %H:%M %Z")
-        system = f"{system}\n\n## Runtime\nCurrent time: {now}\nCurrent chat_id: {chat_id}\n"
+        system = (
+            f"{system}\n\n## Runtime\n"
+            f"Current time: {now}\n"
+            f"Current chat_id: {chat_id}\n"
+            f"Current user_id: {speaker.user_id}\n"
+            f"Current user: {speaker.label}\n"
+        )
 
         contents: list[Any] = self.context.contents_for(hist)
         tools = self._tools_config()
@@ -84,29 +101,36 @@ class AgentLoop:
             if candidate is None or candidate.content is None:
                 reply = "I couldn't generate a reply just now."
                 hist.add("assistant", reply)
-                await self._maybe_persist(chat_key)
+                await self._maybe_persist(history_key, persist_path)
                 return reply
 
             parts = candidate.content.parts or []
             fn_calls = [p for p in parts if getattr(p, "function_call", None)]
             text_parts = [
-                p.text for p in parts if getattr(p, "text", None) and not getattr(p, "function_call", None)
+                p.text
+                for p in parts
+                if getattr(p, "text", None) and not getattr(p, "function_call", None)
             ]
 
             if not fn_calls:
                 reply = "\n".join(t for t in text_parts if t).strip() or "(empty reply)"
                 hist.add("assistant", reply)
-                await self._maybe_persist(chat_key)
+                await self._maybe_persist(history_key, persist_path)
                 return reply
 
-            # Append model turn, then tool responses.
             contents.append(candidate.content)
             function_response_parts: list[types.Part] = []
             for part in fn_calls:
                 fc = part.function_call
                 name = fc.name or ""
                 args = dict(fc.args or {})
-                log.info("tool_call", name=name, args=args, chat_id=chat_key)
+                log.info(
+                    "tool_call",
+                    name=name,
+                    args=args,
+                    chat_id=str(chat_id),
+                    user_id=speaker.user_id,
+                )
                 result = self._dispatch_tool(name, args)
                 function_response_parts.append(
                     types.Part.from_function_response(
@@ -118,11 +142,11 @@ class AgentLoop:
 
         reply = "I hit the tool-call limit for this turn — try again with a narrower ask."
         hist.add("assistant", reply)
-        await self._maybe_persist(chat_key)
+        await self._maybe_persist(history_key, persist_path)
         return reply
 
-    async def _maybe_persist(self, chat_id: str) -> None:
-        hist = self.history.get(chat_id)
+    async def _maybe_persist(self, history_key: str, persist_path: str) -> None:
+        hist = self.history.get(history_key)
         if hist.turns_since_persist < self.settings.history_persist_every:
             return
         snapshot = hist.snapshot_text()
@@ -150,8 +174,12 @@ class AgentLoop:
                 return
             stamp = datetime.now(tz=self.tz).isoformat()
             block = f"\n## Summary @ {stamp}\n{summary}\n"
-            self.memory.append(f"conversations/{chat_id}.md", block)
+            self.memory.append(persist_path, block)
             hist.trim_after_persist(keep=4)
-            log.info("history_persisted", chat_id=chat_id)
+            log.info("history_persisted", history_key=history_key, path=persist_path)
         except Exception as exc:  # noqa: BLE001
-            log.error("history_persist_failed", chat_id=chat_id, error=str(exc))
+            log.error(
+                "history_persist_failed",
+                history_key=history_key,
+                error=str(exc),
+            )
